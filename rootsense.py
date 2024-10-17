@@ -27,6 +27,27 @@ def run_command(command, target='stdout'):
     elif target == 'stderr':
         return command_result.stderr
 
+def write_files(file, base_folder, relative_path):
+    excluded_files = ['AllRoot.h', 'rootsense.h']
+
+    #compute the working folder
+    working_folder = base_folder / relative_path
+
+    #gather all subfolders of the working folder
+    subfolders = [folder.name for folder in working_folder.iterdir() if folder.is_dir()]
+    for subfolder in subfolders:
+        #recursively call this function on all subfolders
+        write_files(file, base_folder, relative_path + f'{subfolder}/')
+
+    #get all the '*.h' and '*.hh' files in this folder
+    header_files_paths = [file for file in working_folder.glob('*') if file.suffix in ['.h', '.hh']]
+    header_files_names = [filepath.name for filepath in header_files_paths if filepath.name not in excluded_files]
+    logger.info(f'{len(header_files_names)} header files found in {working_folder}')
+    for name in header_files_names:
+        file.write(f'#include \"{relative_path + name}\"\n')
+
+    #get all the subfolders
+
 def main(args):
     logger.info('Gathering root install path...')
     #this generates something like '/home/{user}/root/bin/root'
@@ -42,12 +63,16 @@ def main(args):
     #now we need to navigate to the include path
     root_include_folder = root_base_folder / 'include'
 
-    #get all the '*.h' files in this folder
-    include_files = list(root_include_folder.glob('*.h'))
-    logger.info(f'{len(include_files)} header files found in {root_include_folder}')
+    #open target file
+    include_all_file = Path(root_include_folder, 'rootsense.h')
+    with include_all_file.open('w') as file:
+        logger.info(f'Writing include directives in {include_all_file}...')
+        file.write('#ifndef ROOTSENSE\n')
+        file.write('#define ROOTSENSE\n\n')
+        write_files(file, root_include_folder, '')
+        file.write('\n#endif')
+
     
-    for file in include_files:
-        print(file)
 
 
 if __name__ == '__main__':
