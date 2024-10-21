@@ -3,9 +3,33 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import subprocess
 import argparse
+import sys
+import time
 
 #simple global variable to keep track of the number of lines written on the output file
 out_lines = 0
+
+class ProgressBar:
+    def __init__(self, frac: float = 0.0, bar_length: int = 50):
+        self.frac = frac
+        self.bar_length = bar_length
+
+
+    def update(self, frac = None):
+        #updates the progress bar and prints it in place
+        if frac is not None:
+            self.frac = frac
+        
+
+        fill_width = int(self.frac * self.bar_length)
+        bar = '#' * fill_width + '-' * (self.bar_length - fill_width)
+        
+        sys.stdout.write(f'\r[{bar}] {self.frac*100.:.2f}%')
+        sys.stdout.flush()
+
+        if frac == 1.:
+            print('')
+
 
 @dataclass
 class Library:
@@ -113,7 +137,7 @@ def dependencies_satisfied(base_folder, file_path, existing_library):
         
         #skip this iteration if the file is already known
         if inc_file in existing_library:
-            logger.info(f'"{inc_file}" is already known. Check will be skipped.')
+            logger.trace(f'"{inc_file}" is already known. Check will be skipped.')
             continue
 
         #first check inside the root include directory
@@ -127,7 +151,7 @@ def dependencies_satisfied(base_folder, file_path, existing_library):
 
         #if this check fails, search for this file anywhere else
         else:
-            logger.info(f'No match for "{inc_file}" found inside the root library, looking elsewhere...')
+            logger.trace(f'No match for "{inc_file}" found inside the root library, looking elsewhere...')
 
             file_complete_paths = []
             for search_path in search_paths:
@@ -188,7 +212,6 @@ def write_files(out_file, base_folder, relative_path, library = Library()):
     #gather all subfolders of the working folder
     subfolders = [folder.name for folder in working_folder.iterdir() if folder.is_dir()]
     for subfolder in subfolders:
-        logger.info(f'Writing funcion called recursively in {working_folder}/{subfolder}...')
         #recursively call this function on all subfolders and use their output to update the library
         library |= write_files(out_file, base_folder, relative_path + f'{subfolder}/')
         
@@ -196,8 +219,14 @@ def write_files(out_file, base_folder, relative_path, library = Library()):
     #get all the '*.h' and '*.hh' files in this folder
     header_files_paths = [file for file in working_folder.glob('*') if file.suffix in ['.h', '.hh']]
     header_files_names = [filepath.name for filepath in header_files_paths]
-    logger.info(f'{len(header_files_names)} header file(s) found in {working_folder}')
-    for path, name in zip(header_files_paths, header_files_names):
+    logger.info(f'Parsing {len(header_files_names)} header file(s) found in {working_folder}...')
+    #machinery for printing the progress bar for this folder
+    bar = ProgressBar()
+    total = len(header_files_names)
+    if total != 0:
+        bar.update()
+
+    for i, (path, name) in enumerate(zip(header_files_paths, header_files_names)):
         #skip iteration if the file is among the excluded ones
         if name in excluded_files:
             continue
@@ -210,9 +239,12 @@ def write_files(out_file, base_folder, relative_path, library = Library()):
             if dependency_check:
                 out_file.write(f'#include \"{relative_path + name}\"\n')
                 out_lines += 1
-                logger.success(f'All dependency checks complete on {path}')
+                logger.trace(f'All dependency checks complete on {path}')
             else:
-                logger.warning(f'Dependency checks failed on {path}: file will not be included.')
+                logger.trace(f'Dependency checks failed on {path}: file will not be included.')
+
+        frac = (i+1) / total
+        bar.update(frac)
 
     
     return library
@@ -220,6 +252,9 @@ def write_files(out_file, base_folder, relative_path, library = Library()):
 
 
 def main(args):
+    #gather start time
+    start_time = time.time()
+
     logger.info('Gathering root install path...')
     #this generates something like '/home/{user}/root/bin/root'
     root_exec_path_result = bash_command('which root')
@@ -243,13 +278,20 @@ def main(args):
         dependencies_library = write_files(file, root_include_folder, '')
         file.write('\n#endif')
 
-    logger.success(f'{out_lines} lines of directives written in "rootsense.h"')
-    print('Make sure the following root paths are added to your VsCode include paths:')
-    for path in dependencies_library.root_dependencies.values():
+    logger.success(f'{out_lines} lines of directives written in "rootsense.h" in {time.time() - start_time:.1f} seconds.')
+
+    #cast library dicts into sets for printing
+    root_dependencies_set = set(dependencies_library.root_dependencies.values())
+    other_dependencies_set = set(dependencies_library.other_dependencies.values())
+
+    print('\n~' + 50 * '-' + '~')
+    print(f'Make sure the following {len(root_dependencies_set)} root paths are added to your VsCode include paths:')
+    for path in root_dependencies_set:
         print(path)
 
+    print('\n~' + 50 * '-' + '~')
     print('Other paths for included files elsewhere. They probably are already taken care of by VsCode, but try to add them if you encounter any problems:')
-    for path in dependencies_library.other_dependencies.values():
+    for path in other_dependencies_set:
         print(path)
     
 
