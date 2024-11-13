@@ -1,10 +1,42 @@
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 import subprocess
 import time
 
 def is_ascii(file):
     return 'ASCII' in subprocess.run(['file', str(file)], capture_output=True, text=True).stdout
+
+class ProgressBar:
+    def __init__(self, frac: float = 0.0, bar_length: int = 50):
+        self.frac = frac
+        self.bar_length = bar_length
+
+    def initialize(self):
+        self.update()
+
+    def update(self, frac = None):
+        #if percentage does not change, don't do anything 'cause it's a waste of print time
+        if frac is not None and abs(self.frac - frac) <= .001 and frac != 1.:
+            return
+
+        #updates the progress bar and prints it in place
+        if frac is not None:
+            self.frac = frac
+        else:
+            self.frac = 0.
+
+        fill_width = int(self.frac * self.bar_length)
+        bar = '#' * fill_width + '-' * (self.bar_length - fill_width)
+        
+        sys.stdout.write(f'\r[{bar}] {self.frac*100.:.2f}%')
+        sys.stdout.flush()
+
+        if frac == 1.:
+            print('')
+
+    def terminate(self):
+        self.update(1.)
 
 @dataclass
 class _RSItem:
@@ -35,7 +67,7 @@ class _RSItem:
     def from_path(cls, path):
         #if this path is a file, returns the instance, otherwise None
         if path.is_file():
-            return cls(path.name, str(path))
+            return cls(path.name, str(path.resolve()))
 
 class RSTree:
     def __init__(self):
@@ -83,9 +115,14 @@ class RSTree:
         '''
         Returns the element associated to the file `key`
         '''
-        key = str(key)
-        key_item = _RSItem(key)
-        err = KeyError(f'File {key} not found.')
+        if isinstance(key, str):
+            key_item = _RSItem(key)
+        elif isinstance(key, Path):
+            key_item = _RSItem.from_path(key)
+        else:
+            key_item = key
+        
+        err = KeyError(f'File "{str(key)}" not found.')
 
         if self._item is None or key not in self:
             raise err
@@ -134,6 +171,32 @@ class RSTree:
                 return False
             return item in self._right
     
+    def __or__(self, other):
+        '''
+        Merge other tree into self
+        '''
+        if not isinstance(other, RSTree):
+            raise TypeError(f'Cannot merge {type(other)} into {type(self)} object.')
+
+        if other is None:
+            return self
+        
+        if other._item is not None:
+            self.insert(other._item)
+        if other._left is not None:
+            self |= other._left
+        if other._right is not None:
+            self |= other._right 
+
+        return self
+
+    def merge(self, *others):
+        if not isinstance(others, list):
+            self |= others
+        else:
+            for other in others:
+                self |= other
+
     def printout(self):
         if self._left is not None:
             self._left.printout()
@@ -141,7 +204,7 @@ class RSTree:
         if self._right is not None:
             self._right.printout()
 
-    def insert_path(self, path, ext=['.h', '.hh', ''], ascii=True):
+    def insert_path(self, path, ext=['.h', '.hh', ''], ascii=True, progress=False):
         '''
         Inserts all files in `path` and all its subdirectories inside the tree
 
@@ -153,36 +216,37 @@ class RSTree:
             the file extensions allowed, use just `'*'` to include all
         ascii: bool, default=`True`
             instructs to only include plain text files in case the file is extensionless
+        progress: bool, default=`False`
+            determines if a progressbar is printed to show generation progress
         '''
         if not isinstance(path, Path):
             path = Path(path)
+        if progress:
+            print(f'Generating file tree from {str(path)}...')
+        if progress:
+            bar = ProgressBar()
+            bar.update()
 
-        #dump all path content, irregardless of file or directory
-        path_content = path.glob('*')
-        files = []
-        subdirs = []
-        #apparently, `path.glob()` returns a generator which is \
-        # iterable only once and returns `PosixPath` objects
-        for elem in path_content:
-            if elem.is_file():
-                files.append(elem)
-            elif elem.is_dir():
-                subdirs.append(elem)
-
+        #dump all path content, irregardless of file or directory in all subfolders
+        path_content = path.rglob('*')
+        files = [file for file in path_content if file.is_file()]
+        
         #insert first all files in the tree, as long as they are headers
-        for file in files:
+        n = len(files)
+        for i, file in enumerate(files):
+            if progress:
+                bar.update(i / n)
             #extension check
             if ext == '*' or file.suffix in ext:
                 #in case of no extension, check for ascii and if not skip file
                 if ascii and file.suffix == '' and not is_ascii(file):
                     continue
                 self.insert(file)
-        #recursive call on all subfolders
-        for subdir in subdirs:
-            self.insert_path(subdir, ext, ascii)
+        if progress:
+            bar.update(1.)
 
     @classmethod
-    def from_dir(cls, *directories):
+    def from_dir(cls, *directories, progress=False, ext=['.h', '.hh', '']):
         '''
         Generates an `RSTree` object containing all files in the `directories`, \
         ordered by file name
@@ -191,13 +255,16 @@ class RSTree:
         ----------
         *directories: any number of str or Path 
             the directories starting from which the tree is formed
-
+        ext: list of str, default=`['.h', '.hh', '']`
+            the file extensions allowed, use just `'*'` to include all
+        progress: bool, default = `False`
+            determines if a progressbar is printed to show generation progress
         Returns
         -------
         `RSTree` object
         '''
         #use this instead of directories, now they are all paths (pay attention to the case where it's single str)
-        if isinstance(directories, str):
+        if isinstance(directories, str) or isinstance(directories, Path):
             paths = [Path(directories)]
         else:
             paths = [Path(dir) for dir in directories if not isinstance(directories, str)]
@@ -206,9 +273,17 @@ class RSTree:
         dir_tree = cls()
         #use class method to insert all paths
         for path in paths:
-            dir_tree.insert_path(path)
+            dir_tree.insert_path(path, ext=ext,progress=progress)
 
         return dir_tree
+
+    @classmethod
+    def from_tree_list(cls, list):
+        tree = cls()
+        for item in list:
+            tree |= item
+
+        return tree
 
     def size(self):
         if self._item is None:
@@ -225,3 +300,9 @@ class RSTree:
         depth_r = self._right.depth() if self._right is not None else 0
         depth_l = self._left.depth() if self._left is not None else 0
         return 1 + max(depth_l, depth_r)
+    
+    def has_been_seen(self, item):
+        return item in self and self[item].seen
+    
+    def mark_as_seen(self, item):
+        self[item].seen = True
