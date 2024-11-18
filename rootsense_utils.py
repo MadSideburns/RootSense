@@ -5,6 +5,13 @@ import sys
 import time
 import subprocess
 
+def andl(items: List[bool]) -> bool:
+    result = True
+    for item in items:
+        result &= item
+
+    return result
+
 def bash_command(command: str) -> subprocess.CompletedProcess:
     '''
     Runs the `command` on the system bash
@@ -184,7 +191,7 @@ class RSNode:
                 self._right = RSNode()
             self._right.insert(item)
 
-    def insert_dir(self, dir: str | Path, ext: List[str] | str = ['.h', '.hh', ''], ascii_only: bool = True, progress: bool = False) -> None:
+    def insert_dir(self, dir: str | Path, ext: List[str] | str = ['.h', '.hh', '.hxx', '.tcc', ''], ascii_only: bool = True, progress: bool = False) -> None:
         '''
         Inserts all files in `dir` and all its subdirectories inside the tree
 
@@ -192,7 +199,7 @@ class RSNode:
         ----------
         path: str or `Path` instance
             the path to be inserted
-        ext: list of str, default=`['.h', '.hh', '']`
+        ext: list of str, default=`['.h', '.hh', '.hxx', '']`
             the file extensions allowed, use just `['*']` to include all
         ascii_only: bool, default=`True`
             instructs to only include plain text files in case the file is extensionless
@@ -392,7 +399,7 @@ class RSNode:
         depth_r = self._right.depth() if self._right is not None else 0
         return 1 + max(depth_l, depth_r)
 
-    def get_seen_status(self, item: str | Path | _RSItem) -> bool:
+    def has_been_seen(self, item: str | Path | _RSItem) -> bool:
         item = _RSItem.to_RSItem(item)
 
         #let __getitem__ figure out the eventual errors
@@ -400,3 +407,12 @@ class RSNode:
 
     def mark_as_seen(self, item: str | Path | _RSItem) -> None:
         self[item].seen = True
+
+    def is_ok_to_include(self, item: str | Path | _RSItem) -> bool:
+        return self[item].ok_to_include
+    
+    def set_ok_to_include(self, item: str | Path | _RSItem, status: bool = True) -> None:
+        self[item].ok_to_include = status
+
+    def get_item_path(self, item: str | Path | _RSItem) -> Path:
+        return Path(self[item].file_path)
